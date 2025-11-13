@@ -33,7 +33,7 @@ function buildPrompts(mode, topic, wikiText) {
 
   return {
     system: 'Return JSON only. Use only keys: status, topic, summary, quiz, studyTip.',
-    user: `${commonPrefix}\nTask: Create:\n- summary: array of 3 short bullets (<=20 words each)\n- quiz: array of 3 MCQs: each {id:int, question:string, choices:[4 strings], answerIndex:int}\n- studyTip: one short sentence (<=15 words)\nReturn valid JSON only.`,
+    user: `${commonPrefix}\nTask: Create:\n- summary: array of 3 short bullets (<=20 words each) covering different aspects of the topic\n- quiz: array of 3 diverse MCQs that test different aspects of the topic. Each question should be unique, specific to the topic content, and test understanding rather than just recognition. Format: {id:int, question:string (specific to topic), choices:[4 strings where only one is correct and others are plausible distractors], answerIndex:int (0-3)}\n- studyTip: one short sentence (<=15 words)\n\nIMPORTANT: Questions must be diverse and topic-specific. Avoid generic template questions. Base questions on actual content from the topic text.\nReturn valid JSON only.`,
   };
 }
 
@@ -107,8 +107,8 @@ async function callGemini(systemPrompt, userPrompt, attempt = 1) {
           },
         ],
         generationConfig: {
-          temperature: 0.5,
-          maxOutputTokens: 800,
+          temperature: 0.7,
+          maxOutputTokens: 1200,
         },
       },
       {
@@ -176,39 +176,61 @@ function buildFallbackSummary(wikiText) {
   return bullets;
 }
 
-function buildFallbackQuiz(topic, summary) {
-  const distractors = [
-    `${topic} involves historical perspectives.`,
-    `${topic} is primarily about astronomy.`,
-    `${topic} focuses on culinary arts.`,
-  ];
+function sanitizeTopicName(rawTopic) {
+  if (typeof rawTopic !== 'string') {
+    return '';
+  }
+
+  const cleaned = rawTopic.replace(/\$\{[^}]+\}/g, '').trim();
+  return cleaned || rawTopic.trim();
+}
+
+function buildFallbackQuiz(topic, summary, wikiText) {
+  const safeTopic = sanitizeTopicName(topic);
+  // Extract key terms from wikiText to create more relevant questions
+  const sentences = wikiText.split(/[.!?]+/).filter(s => s.trim().length > 20);
+  const firstSentence = sentences[0]?.trim() || summary[0] || `${safeTopic} is an important subject.`;
+  
+  // Create more topic-specific distractors based on common patterns
+  const createDistractors = (correctAnswer) => {
+    const generic = [
+      'It is a fundamental concept in mathematics.',
+      'It relates to historical events and timelines.',
+      'It involves scientific principles and experiments.',
+      'It focuses on artistic expression and creativity.',
+    ];
+    
+    // Shuffle and pick 3 that are different from the correct answer
+    const shuffled = generic.sort(() => Math.random() - 0.5);
+    return shuffled.slice(0, 3);
+  };
+
+  const distractorSet1 = createDistractors(summary[0]);
+  const distractorSet2 = createDistractors(summary[1] || summary[0]);
+  const distractorSet3 = createDistractors(summary[2] || summary[0]);
 
   return [
     {
       id: 1,
-      question: `Which statement best reflects ${topic}?`,
-      choices: [summary[0], ...distractors],
+      question: `Based on the information provided, which statement accurately describes ${safeTopic}?`,
+      choices: [summary[0], ...distractorSet1],
       answerIndex: 0,
     },
     {
       id: 2,
-      question: `Which area is most closely linked to ${topic}?`,
+      question: `What is a key characteristic or aspect of ${safeTopic}?`,
       choices: [
-        `${topic} principles`,
-        'Basket weaving',
-        'Deep-sea fishing',
-        'Daily weather reports',
+        summary[1] || summary[0],
+        ...distractorSet2,
       ],
       answerIndex: 0,
     },
     {
       id: 3,
-      question: `Why might someone study ${topic}?`,
+      question: `Which of the following is most relevant to understanding ${safeTopic}?`,
       choices: [
-        'To understand its key concepts.',
-        'To learn baking recipes.',
-        'To plan vacation itineraries.',
-        'To memorise random numbers.',
+        summary[2] || summary[0],
+        ...distractorSet3,
       ],
       answerIndex: 0,
     },
@@ -226,17 +248,18 @@ function buildFallbackMathQuestion(topic) {
 
 function buildFallbackContent({ topic, wikiText, mode }) {
   const summary = buildFallbackSummary(wikiText);
+  const safeTopic = sanitizeTopicName(topic);
 
   if (mode === 'math') {
     return {
-      mathQuestion: buildFallbackMathQuestion(topic),
+      mathQuestion: buildFallbackMathQuestion(safeTopic),
     };
   }
 
   return {
     summary,
-    quiz: buildFallbackQuiz(topic, summary),
-    studyTip: `Review the main definitions of ${topic} twice today.`,
+    quiz: buildFallbackQuiz(safeTopic, summary, wikiText),
+    studyTip: `Review the main definitions of ${safeTopic} twice today.`,
   };
 }
 
